@@ -1,51 +1,66 @@
-var util              = require('util');
-var castv2Cli         = require('castv2-client');
-var Application       = castv2Cli.Application;
-var MediaController   = castv2Cli.MediaController;
-var YoutubeController = require('./YoutubeController');
+'use strict';
+
+const util = require('util');
+const ytdl = require('ytdl-core');
+const castv2Cli = require('castv2-client');
+const DefaultMediaReceiver = castv2Cli.DefaultMediaReceiver;
+const MediaController = castv2Cli.MediaController;
 
 function Youtube(client, session) {
-  Application.apply(this, arguments);
-
-  this.media = this.createController(MediaController);
-  this.youtube = this.createController(YoutubeController);
-
-  this.media.on('status', onstatus);
-
-  var self = this;
-
-  function onstatus(status) {
-    self.emit('status', status);
-  }
-
+	DefaultMediaReceiver.apply(this, arguments);
 }
 
-Youtube.APP_ID = '233637DE';
+util.inherits(Youtube, DefaultMediaReceiver);
 
-util.inherits(Youtube, Application);
+Youtube.APP_ID = DefaultMediaReceiver.APP_ID;
 
-Youtube.prototype.getStatus = function(callback) {
-  this.media.getStatus.apply(this.media, arguments);
-};
+Youtube.prototype.load = function (videoId, options, callback) {
+	options = Object.assign({ contentType: 'video/mp4' }, options);
+	ytdl.getInfo(`https://www.youtube.com/watch?v=${videoId}`, (err, info) => {
+		if (err) return callback(err);
+		if (!info || !info.formats || info.formats.length === 0) return callback(new Error('Invalid youtube url'));
 
-Youtube.prototype.load = function(videoId) {
-  this.youtube.load.apply(this.youtube, arguments);
-};
+		const format = info.formats
+			.map(format =>
+				Object.assign(format, { resolution: format.resolution ? Number(format.resolution.slice(0, -1)) : null })
+			)
+			.filter(format =>
+				format.type && format.type.indexOf(options.contentType) !== -1 &&
+				(!options.targetResolution || format.resolution && format.resolution <= options.targetResolution) &&
+				(!options.targetBitrate || format.bitrate && format.bitrate <= options.targetBitrate) &&
+				(!options.targetAudioBitrate || format.audioBitrate && format.audioBitrate <= options.targetAudioBitrate) &&
+				(!options.audioEncoding || format.audioEncoding && (
+						format.audioEncoding === options.audioEncoding ||
+						(Array.isArray(options.audioEncoding) && options.audioEncoding.contains(format.audioEncoding))
+					)
+				)
+			)
+			.sort((a, b) => {
+				if (options.targetResolution && b.resolution !== a.resolution) {
+					return b.resolution - a.resolution;
+				} else if (options.targetBitrate && b.bitrate !== a.bitRate) {
+					return b.bitrate - a.bitRate;
+				} else if (options.targetAudioBitrate && b.audioBitrate !== a.audioBitrate) {
+					return b.audioBitrate - a.audioBitrate;
+				} else {
+					return 0;
+				}
+			})[0];
 
-Youtube.prototype.play = function(callback) {
-  this.media.play.apply(this.media, arguments);
-};
+		if (!format || !format.url) return callback(new Error('No applicable video format found'));
 
-Youtube.prototype.pause = function(callback) {
-  this.media.pause.apply(this.media, arguments);
-};
+		console.log('selected format', format);
 
-Youtube.prototype.stop = function(callback) {
-  this.media.stop.apply(this.media, arguments);
-};
-
-Youtube.prototype.seek = function(currentTime, callback) {
-  this.media.seek.apply(this.media, arguments);
+		DefaultMediaReceiver.prototype.load.call(
+			this,
+			{
+				contentId: format.url,
+				contentType: format.type || options.contentType || 'video/mp4',
+			},
+			options,
+			callback
+		);
+	})
 };
 
 module.exports = Youtube;
